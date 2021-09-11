@@ -63,21 +63,112 @@ class Controller : public controller_interface::MultiInterfaceController<hardwar
 {
 public:
   Controller() = default;
+  /** @brief Get params from param server. Init the Joint_Velocity_Controller and Joint_position_Controller.
+   *
+   * Get params from param server and add parameters related to friction wheel's angular velocity corresponding
+   * to each bullet speed and trigger block detection parameters to dynamic_reconfigure. Init the
+   * right friction controller, left friction controller, and trigger wheel controller.
+   *
+   * @param robot_hw The robot hardware abstraction.
+   * @param root_nh A NodeHandle in the root of the controller manager namespace. This is where the ROS interfaces are
+   * setup (publishers, subscribers, services).
+   * @param controller_nh A NodeHandle in the namespace of the controller. This is where the controller-specific
+   * configuration resides.
+   * @return True if the left and right friction wheel and trigger wheel controller init successfully, false when any
+   * one of them initialize failed.
+   */
   bool init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle& root_nh, ros::NodeHandle& controller_nh) override;
+  /** @brief Execute the corresponding action according to the state of the controller.
+   *
+   * If the state switch to STOP, the right and left friction controller will set velocity of the joint to 0.
+   * If the state switch to READY, shooter controller will execute normalize, function to reset the trigger
+   * wheel to the correct position. If the state switch to PUSH, shooter controller will send commands
+   * to rotate the trigger wheel. If the state switch to BLOCK, shooter controller reverse an angle to get
+   * rid of blocking, and then conduct block detection.
+   *
+   * @param time The current time.
+   * @param period The time passed since the last call to update.
+   */
   void update(const ros::Time& time, const ros::Duration& period) override;
+  /** @brief Switch the state of shooter controller to STOP, and set the value of state_changed_ to TRUE.
+   *
+   *
+   *
+   * @param time The current time.
+   */
   void starting(const ros::Time& /*time*/) override;
 
 private:
+  /** @brief Set the velocity of the friction wheel to 0 to make it stop.
+   *
+   * When the state of shooter controller switch to STOP, the right and left friction controller will
+   * be set velocity of the friction wheel to 0 to stop.
+   *
+   * @param time The current time.
+   * @param period The time passed since the last call to update.
+   */
   void stop(const ros::Time& time, const ros::Duration& period);
+  /** @brief Execute @ref normalize to reset the trigger wheel to the correct position.
+   *
+   * When the state of controller switch to READY, shooter controller will execute @ref normalize
+   * to reset the trigger wheel to the correct position.
+   *
+   * @param period The time passed since the last call to update.
+   */
   void ready(const ros::Duration& period);
+  /** @brief
+   *
+   * When the state of shooter controller switch to PUSH, shooter controller will judge
+   * if the angular velocity of friction wheel is 0, when the angular velocity of friction wheel
+   * is greater than 0, the controller will send commands to rotate the trigger wheel.
+   *
+   * @param time The current time.
+   * @param period The time passed since the last call to update.
+   */
   void push(const ros::Time& time, const ros::Duration& period);
+  /** @brief The friction wheel will reverse anti_block_angle to try to get rid of blocking,
+   * if reverse successfully shooter controller will enter PUSH state.
+   *
+   * When the state of shooter controller switch to BLOCK, the friction wheel will
+   * reverse anti_block_angle to try to get rid of BLOCK state, and then detect whether
+   * shooter controller still blocking, if get rid of blocking, shooter controller will enter PUSH state.
+   *
+   * @param time The current time.
+   * @param period The time passed since the last call to update.
+   */
   void block(const ros::Time& time, const ros::Duration& period);
+  /** @brief Set the corresponding angular velocity for the left and right friction wheels according to values of cmd_.speed.
+   *
+   * The shooter controller will read the rm_msgs::ShootCmd date, and set the angular velocity for friction wheel
+   * according to the bullet speed set by command.
+   *
+   * @param cmd Command message about the state of shooter controller, bullet speed, frequency of shooting.
+   */
   void setSpeed(const rm_msgs::ShootCmd& cmd);
+  /** @brief Before the trigger wheel is set command for rotating, set the trigger wheel to the correct position.
+   *
+   * Before the friction wheel is ready to enter PUSH state,
+   *
+   */
   void normalize();
+  /** @brief Write the data of msg inside to the non real-time buffer.
+   *
+   *
+   *
+   * @param msg Message about the state of shooter controller, bullet speed, frequency of shooting.
+   */
   void commandCB(const rm_msgs::ShootCmdConstPtr& msg)
   {
     cmd_rt_buffer_.writeFromNonRT(*msg);
   }
+  /** @brief Call back function when the server gets a reconfiguration request it will call our
+     * callback function to update the value in the parameter.
+     *
+     *
+     *
+     * @param config Date related to friction wheel's angular velocity corresponding
+     * to each bullet speed and trigger block detection parameters.
+     */
   void reconfigCB(rm_shooter_controllers::ShooterConfig& config, uint32_t /*level*/);
 
   hardware_interface::EffortJointInterface* effort_joint_interface_{};
@@ -90,6 +181,7 @@ private:
   bool maybe_block_ = false;
 
   ros::Time last_shoot_time_, block_time_, last_block_time_;
+  // The state of shooter controller
   enum
   {
     STOP,
