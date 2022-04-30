@@ -18,6 +18,7 @@ find_package(catkin REQUIRED
         rm_msgs
         rm_common
 
+        nav_msgs
         pluginlib
         hardware_interface
         controller_interface
@@ -53,6 +54,7 @@ catkin_package(
         rm_msgs
         rm_common
 
+        nav_msgs
         pluginlib
         hardware_interface
         controller_interface
@@ -81,9 +83,10 @@ include_directories(
 add_library(${PROJECT_NAME}
         src/chassis_base.cpp
         src/mecanum.cpp
+        src/omni.cpp
         src/sentry.cpp
-        src/balance.cpp
         src/swerve.cpp
+        src/reaction_wheel.cpp
         )
 
 ## Specify libraries to link executable targets against
