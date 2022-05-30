@@ -22,11 +22,33 @@ bool ReactionWheelController::init(hardware_interface::RobotHW* robot_hw, ros::N
   joint_handle_ = robot_hw->get<hardware_interface::EffortJointInterface>()->getHandle(
       getParam(controller_nh, "joint", std::string("reaction_wheel_joint")));
 
-  double m_total, l, g, dt;  //  m_total and l represent the total mass and distance between the pivot point to the
-                             //  center of gravity of the whole system respectively.
-  if (!controller_nh.getParam("m_total", m_total))
+  left_wheel_handle_ = robot_hw->get<hardware_interface::JointStateInterface>()->getHandle("left_wheel_joint");
+  right_wheel_handle_ = robot_hw->get<hardware_interface::JointStateInterface>()->getHandle("right_wheel_joint");
+
+  // i_b is moment of inertia of the pendulum body around the pivot point,
+  // i_w is the moment of inertia of the wheel around the rotational axis of the motor
+  // l is the distance between the motor axis and the pivot point
+  // l_b is the distance between the center of mass of the pendulum body and the pivot point
+  double m_b, m_w, i_b, i_w, l, l_b, g;
+
+  if (!controller_nh.getParam("m_b", m_b))
   {
-    ROS_ERROR("Params m_total doesn't given (namespace: %s)", controller_nh.getNamespace().c_str());
+    ROS_ERROR("Params m_b doesn't given (namespace: %s)", controller_nh.getNamespace().c_str());
+    return false;
+  }
+  if (!controller_nh.getParam("m_w", m_w))
+  {
+    ROS_ERROR("Params m_w doesn't given (namespace: %s)", controller_nh.getNamespace().c_str());
+    return false;
+  }
+  if (!controller_nh.getParam("i_b", i_b))
+  {
+    ROS_ERROR("Params i_b doesn't given (namespace: %s)", controller_nh.getNamespace().c_str());
+    return false;
+  }
+  if (!controller_nh.getParam("i_w", i_w))
+  {
+    ROS_ERROR("Params i_w doesn't given (namespace: %s)", controller_nh.getNamespace().c_str());
     return false;
   }
   if (!controller_nh.getParam("l", l))
@@ -34,26 +56,24 @@ bool ReactionWheelController::init(hardware_interface::RobotHW* robot_hw, ros::N
     ROS_ERROR("Params l doesn't given (namespace: %s)", controller_nh.getNamespace().c_str());
     return false;
   }
+  if (!controller_nh.getParam("l_b", l_b))
+  {
+    ROS_ERROR("Params l_b doesn't given (namespace: %s)", controller_nh.getNamespace().c_str());
+    return false;
+  }
   if (!controller_nh.getParam("g", g))
   {
     ROS_ERROR("Params g doesn't given (namespace: %s)", controller_nh.getNamespace().c_str());
     return false;
   }
-  if (!controller_nh.getParam("inertia_total", inertia_total_))
+
+  if (!controller_nh.getParam("alpha", alpha_))
   {
-    ROS_ERROR("Params inertia_total doesn't given (namespace: %s)", controller_nh.getNamespace().c_str());
+    ROS_ERROR("Params alpha doesn't given (namespace: %s)", controller_nh.getNamespace().c_str());
     return false;
   }
-  if (!controller_nh.getParam("inertia_wheel", inertia_wheel_))
-  {
-    ROS_ERROR("Params inertia_wheel_ doesn't given (namespace: %s)", controller_nh.getNamespace().c_str());
-    return false;
-  }
-  if (!controller_nh.getParam("dt", dt))
-  {
-    ROS_ERROR("Params dt doesn't given (namespace: %s)", controller_nh.getNamespace().c_str());
-    return false;
-  }
+  q_.setZero();
+  r_.setZero();
   XmlRpc::XmlRpcValue q, r;
   controller_nh.getParam("q", q);
   controller_nh.getParam("r", r);
@@ -81,17 +101,18 @@ bool ReactionWheelController::init(hardware_interface::RobotHW* robot_hw, ros::N
   }
 
   // Continuous model \dot{x} = A x + B u
-  a_ << 0., 1 / inertia_total_, -1 / inertia_total_, m_total * l * g, 0., 0., 0, 0, 0;
-  b_ << 0., 0., 1.;
-  // Convert model from continuous to discrete time: x_{n+1} = A x_{n} + B u_{n}
-  Matrix<double, STATE_DIM + CONTROL_DIM, STATE_DIM + CONTROL_DIM> ab_c;
-  ab_c.setZero();
-  ab_c.block(0, 0, STATE_DIM, STATE_DIM) = a_;
-  ab_c.block(0, STATE_DIM, STATE_DIM, CONTROL_DIM) = b_;
-  ab_c = dt * ab_c;
-  Matrix<double, STATE_DIM + CONTROL_DIM, STATE_DIM + CONTROL_DIM> exp = ab_c.exp();
-  a_ = exp.block(0, 0, STATE_DIM, STATE_DIM);
-  b_ = exp.block(0, STATE_DIM, STATE_DIM, CONTROL_DIM);
+  torque_g_ = (m_b * l_b + m_w * l) * g;
+  double temp = i_b + m_w * l * l;
+  double a_1_0 = torque_g_ / temp;
+  double a_1_1 = 0.;  // TODO:  dynamic friction coefficient
+  double a_1_2 = 0.;  // TODO:  dynamic friction coefficient
+  double a_2_0 = -a_1_0;
+  double a_2_1 = 0.;
+  double a_2_2 = 0.;
+  double b_1 = -1. / temp;
+  double b_2 = (temp + i_w) / (i_w * temp);
+  a_ << 0., 1., 0., a_1_0, a_1_1, a_1_2, a_2_0, a_2_1, a_2_2;
+  b_ << 0., b_1, b_2;
 
   Lqr<double> lqr(a_, b_, q_, r_);
   if (!lqr.computeK())
@@ -101,14 +122,17 @@ bool ReactionWheelController::init(hardware_interface::RobotHW* robot_hw, ros::N
   }
 
   k_ = lqr.getK();
+  ROS_INFO_STREAM("K of LQR:" << k_);
   return true;
+}
+
+void ReactionWheelController::starting(const ros::Time& time)
+{
+  pitch_offset_ = 0.;
 }
 
 void ReactionWheelController::update(const ros::Time& time, const ros::Duration& period)
 {
-  double pitch_rate = imu_handle_.getAngularVelocity()[1];
-  double wheel_rate = joint_handle_.getVelocity();
-
   // TODO: simplify, add new quatToRPY
   geometry_msgs::Quaternion quat;
   quat.x = imu_handle_.getOrientation()[0];
@@ -119,8 +143,27 @@ void ReactionWheelController::update(const ros::Time& time, const ros::Duration&
   quatToRPY(quat, roll, pitch, yaw);
   Eigen::Matrix<double, STATE_DIM, 1> x;
   x(0) = pitch;
-  x(1) = inertia_total_ * pitch_rate + inertia_wheel_ * wheel_rate;
-  x(2) = inertia_wheel_ * (pitch_rate + wheel_rate);
+  x(1) = imu_handle_.getAngularVelocity()[1];
+  x(2) = joint_handle_.getVelocity();
+
+  pitch_offset_ = (1. - alpha_) * pitch_offset_ + alpha_ * pitch;
+
+  if (std::abs(pitch_offset_) > 0.2)  // TODO pitch_max rosparam
+  {
+    if (std::abs(x(2)) < 1e-2)  // Damped
+      pitch_offset_ = 0.;
+    else  // Damping
+    {
+      joint_handle_.setCommand(-0.4 * x(2));  // TODO damping_factor rosparam
+      return;
+    }
+  }
+
+  //  double pitch_des = std::asin((left_wheel_handle_.getEffort() + right_wheel_handle_.getEffort()) / torque_g_);
+  double pitch_des = pitch_offset_;
+  //  double pitch_des = 0.;
+
+  x(0) = x(0) - pitch_des;
   Eigen::Matrix<double, CONTROL_DIM, 1> u;
   u = k_ * (-x);  // regulate to zero: K*(0 - x)
   joint_handle_.setCommand(u(0));

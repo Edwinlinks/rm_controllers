@@ -77,6 +77,7 @@ private:
 
   rm_control::RobotStateHandle robot_state_handle_;
   hardware_interface::ImuSensorHandle imu_sensor_handle_;
+  bool has_imu_ = true;
   effort_controllers::JointPositionController ctrl_yaw_, ctrl_pitch_;
 
   BulletSolver* bullet_solver_{};
@@ -89,7 +90,7 @@ private:
   realtime_tools::RealtimeBuffer<rm_msgs::GimbalCmd> cmd_rt_buffer_;
   realtime_tools::RealtimeBuffer<rm_msgs::TrackCmd> track_rt_buffer_;
 
-  geometry_msgs::TransformStamped map2gimbal_des_, map2pitch_, map2base_;
+  geometry_msgs::TransformStamped odom2gimbal_des_, odom2pitch_, odom2base_;
 
   rm_msgs::GimbalCmd cmd_gimbal_;
   rm_msgs::TrackCmd cmd_track_;
