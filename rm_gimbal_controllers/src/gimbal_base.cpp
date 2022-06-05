@@ -97,7 +97,7 @@ bool Controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle& ro
   odom2base_.transform.rotation.w = 1.;
 
   cmd_gimbal_sub_ = controller_nh.subscribe<rm_msgs::GimbalCmd>("command", 1, &Controller::commandCB, this);
-  cmd_track_sub_ = controller_nh.subscribe<rm_msgs::TrackCmd>("track_command", 1, &Controller::trackCB, this);
+  data_track_sub_ = controller_nh.subscribe<rm_msgs::TrackData>("/track", 1, &Controller::trackCB, this);
   publish_rate_ = getParam(controller_nh, "publish_rate", 100.);
   error_pub_.reset(new realtime_tools::RealtimePublisher<rm_msgs::GimbalDesError>(controller_nh, "error", 100));
 
@@ -113,7 +113,7 @@ void Controller::starting(const ros::Time& /*unused*/)
 void Controller::update(const ros::Time& time, const ros::Duration& period)
 {
   cmd_gimbal_ = *cmd_rt_buffer_.readFromRT();
-  cmd_track_ = *track_rt_buffer_.readFromNonRT();
+  data_track_ = *track_rt_buffer_.readFromNonRT();
   try
   {
     odom2pitch_ = robot_state_handle_.lookupTransform("odom", ctrl_pitch_.joint_urdf_->child_link_name, time);
@@ -220,16 +220,17 @@ void Controller::track(const ros::Time& time)
   quatToRPY(odom2pitch_.transform.rotation, roll_real, pitch_real, yaw_real);
   double yaw_compute = yaw_real;
   double pitch_compute = -pitch_real;
-  geometry_msgs::Point target_pos = cmd_track_.target_pos;
-  geometry_msgs::Vector3 target_vel = cmd_track_.target_vel;
+  geometry_msgs::Point target_pos = data_track_.target_pos;
+  geometry_msgs::Vector3 target_vel = data_track_.target_vel;
   try
   {
-    if (!cmd_track_.header.frame_id.empty())
-      tf2::doTransform(target_pos, target_pos,
-                       robot_state_handle_.lookupTransform("odom", cmd_track_.header.frame_id, cmd_track_.header.stamp));
-    if (!cmd_track_.header.frame_id.empty())
-      tf2::doTransform(target_vel, target_vel,
-                       robot_state_handle_.lookupTransform("odom", cmd_track_.header.frame_id, cmd_track_.header.stamp));
+    if (!data_track_.header.frame_id.empty())
+    {
+      geometry_msgs::TransformStamped transform =
+          robot_state_handle_.lookupTransform("odom", data_track_.header.frame_id, data_track_.header.stamp);
+      tf2::doTransform(target_pos, target_pos, transform);
+      tf2::doTransform(target_vel, target_vel, transform);
+    }
   }
   catch (tf2::TransformException& ex)
   {
@@ -340,19 +341,44 @@ void Controller::moveJoint(const ros::Time& time, const ros::Duration& period)
   double roll_des, pitch_des, yaw_des;  // desired position
   quatToRPY(base_frame2des.transform.rotation, roll_des, pitch_des, yaw_des);
 
-  double pitch_vel_target, yaw_vel_target;
+  double yaw_vel_des = 0., pitch_vel_des = 0.;
   if (state_ == RATE)
   {
-    pitch_vel_target = cmd_gimbal_.rate_pitch;
-    yaw_vel_target = cmd_gimbal_.rate_yaw;
+    yaw_vel_des = cmd_gimbal_.rate_yaw;
+    pitch_vel_des = cmd_gimbal_.rate_pitch;
   }
   else
   {
-    pitch_vel_target = 0;
-    yaw_vel_target = 0;
+    geometry_msgs::Point target_pos = data_track_.target_pos;
+    geometry_msgs::Vector3 target_vel = data_track_.target_vel;
+    tf2::Vector3 target_pos_tf, target_vel_tf;
+
+    try
+    {
+      geometry_msgs::TransformStamped transform = robot_state_handle_.lookupTransform(
+          ctrl_yaw_.joint_urdf_->parent_link_name, data_track_.header.frame_id, data_track_.header.stamp);
+      tf2::doTransform(target_pos, target_pos, transform);
+      tf2::doTransform(target_vel, target_vel, transform);
+      tf2::fromMsg(target_pos, target_pos_tf);
+      tf2::fromMsg(target_vel, target_vel_tf);
+
+      yaw_vel_des = target_vel_tf.cross(target_pos_tf).z() / std::pow((target_pos_tf.length()), 2);
+      transform = robot_state_handle_.lookupTransform(ctrl_pitch_.joint_urdf_->parent_link_name,
+                                                      data_track_.header.frame_id, data_track_.header.stamp);
+      tf2::doTransform(target_pos, target_pos, transform);
+      tf2::doTransform(target_vel, target_vel, transform);
+      tf2::fromMsg(target_pos, target_pos_tf);
+      tf2::fromMsg(target_vel, target_vel_tf);
+      pitch_vel_des = target_vel_tf.cross(target_pos_tf).y() / std::pow((target_pos_tf.length()), 2);
+    }
+    catch (tf2::TransformException& ex)
+    {
+      ROS_WARN("%s", ex.what());
+    }
   }
-  ctrl_yaw_.setCommand(yaw_des, yaw_vel_target + ctrl_yaw_.joint_.getVelocity() - angular_vel_yaw.z);
-  ctrl_pitch_.setCommand(pitch_des, pitch_vel_target + ctrl_pitch_.joint_.getVelocity() - angular_vel_pitch.y);
+
+  ctrl_yaw_.setCommand(yaw_des, yaw_vel_des + ctrl_yaw_.joint_.getVelocity() - angular_vel_yaw.z);
+  ctrl_pitch_.setCommand(pitch_des, pitch_vel_des + ctrl_pitch_.joint_.getVelocity() - angular_vel_pitch.y);
   ctrl_yaw_.update(time, period);
   ctrl_pitch_.update(time, period);
   ctrl_pitch_.joint_.setCommand(ctrl_pitch_.joint_.getCommand() + feedForward(time));
@@ -381,7 +407,7 @@ void Controller::commandCB(const rm_msgs::GimbalCmdConstPtr& msg)
   cmd_rt_buffer_.writeFromNonRT(*msg);
 }
 
-void Controller::trackCB(const rm_msgs::TrackCmdConstPtr& msg)
+void Controller::trackCB(const rm_msgs::TrackDataConstPtr& msg)
 {
   track_rt_buffer_.writeFromNonRT(*msg);
 }
