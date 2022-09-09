@@ -109,7 +109,6 @@ void SentryController::catapult(const ros::Time& time, const ros::Duration& peri
   }
   if ((time - lock_time_).toSec() > lock_duratoin_)
   {
-    ctrl_catapult_joint_.setCommand(0.);
     //    ctrl_lifting_joint_.setCommand(0.);
     if_catapult_ = false;
     //    if_lifting_ = false;
