@@ -78,10 +78,9 @@ private:
   effort_controllers::JointPositionController ctrl_lifting_joint_;
 
   bool if_catapult_;
-  bool if_lifting_;
   double catapult_initial_velocity_;
   double catapult_angle_;
-  double lifting_angle_;
+  double lifting_distance_;
   double vel_coff_;
   double last_vel_cmd_{ 0. };
   ros::Time lock_time_;
