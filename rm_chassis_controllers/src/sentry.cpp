@@ -79,7 +79,7 @@ void SentryController::moveJoint(const ros::Time& time, const ros::Duration& per
     ROS_INFO("[sentryChassis] Enter CATAPULT");
   }
   last_vel_cmd_ = cmd_rt_buffer_.readFromRT()->cmd_vel_.linear.x;
-  if (if_catapult_ == false)
+  if (!if_catapult_)
   {
     normal(time, period);
     lock_time_ = time;
